@@ -1,0 +1,96 @@
+local user32 = ffi.load"user32.dll"
+ffi.cdef[[
+int EnumWindows(int __stdcall (*proc)(int hwnd, int lp), int lp);
+int EnumChildWindows(int hwnd, int __stdcall (*proc)(int hwnd, int lp), int lp);
+int GetDlgCtrlID(int hwnd);
+int GetWindowThreadProcessId(int hwnd, int *processID);
+
+typedef struct{
+	int left, top, right, bottom;
+}RECT;
+int GetWindowRect(int hWnd, RECT *lpRect);
+]]
+
+/* アクティブなウィンドウハンドルを全て列挙 */
+def Win32.enumerateWindows(proc){
+	if type(proc) == 'function' {
+		return user32.EnumWindows(proc, 0)
+	}else{
+		local handles = Array()
+		user32.EnumWindows(def(hwnd){
+			handles->append(hwnd)
+			return true
+		}, 0)
+		return handles
+	}
+}
+
+/* hwndで指定したハンドルのウィンドウの子ウィンドウハンドルを全て列挙 */
+def Win32.enumerateChildWindows(hwnd, proc){
+	if type(proc) == 'function' {
+		return user32.EnumChildWindows(hwnd, proc, 0)
+	}else{
+		local handles = Array()
+		user32.EnumChildWindows(hwnd, def(hwnd){
+			handles->append(hwnd)
+			return true
+		}, 0)
+		return handles
+	}
+}
+
+/* hwndで指定したハンドルのコントロールのIDを取得 */
+def Win32.getDialogControlID(hwnd){
+	return user32.GetDlgCtrlID(hwnd)
+}
+
+def Win32.getWindowThreadProcessID(hwnd){
+	local procID = ffi.new"int[1]"
+	local thread = user32.GetWindowThreadProcessId(hwnd, procID)
+	return thread, procID[0]
+}
+
+/* hwndで指定したハンドルのウィンドウの位置を取得 */
+def Win32.getWindowPosition(hwnd){
+	local rect = ffi.new"RECT[1]"
+	local ret = user32.GetWindowRect(hwnd, rect)
+	return ret == 1, rect[0].left, rect[0].top, rect[0].right, rect[0].bottom
+}
+
+
+/*** ShellExecute ***/
+local shell = ffi.load"shell32.dll"
+ffi.cdef[[
+int ShellExecuteW(unsigned int hwnd, const wchar_t *lpVerb, const wchar_t *lpFile,
+	const wchar_t *lpParameters, const wchar_t *lpDirectory, int nShowMode);
+]]
+
+/* ShowMode */
+Sltk.Win32.SW_HIDE = 0
+Sltk.Win32.SW_SHOWNORMAL = 1
+Sltk.Win32.SW_SHOWMINIMIZED = 2
+Sltk.Win32.SW_SHOWMAXIMIZED = 3
+Sltk.Win32.SW_SHOWNOACTIVATE = 4
+Sltk.Win32.SW_SHOW = 5
+Sltk.Win32.SW_MINIMIZE = 6
+Sltk.Win32.SW_SHOWMINNOACTIVE = 7
+Sltk.Win32.SW_SHOWNA = 8
+Sltk.Win32.SW_RESTORE = 9
+Sltk.Win32.SW_SHOWDEFAULT = 10
+
+/*
+verb: 操作指定 "edit", "explore", "open", "print", "properties", "runas"
+file: 操作対象ファイルパス
+param: fileで実行可能ファイルを指定した場合、そのコマンドライン引数
+dir: 既定のディレクトリ
+showMode: アプリケーションの表示モード
+*/
+def Win32.shellExecute(verb, file, param, dir, showMode, hwnd){
+	return shell.ShellExecuteW(
+		hwnd | 0, Sltk.Encoding.utf8ToWideString(verb),
+		Sltk.Encoding.utf8ToWideString(file),
+		param & Sltk.Encoding.utf8ToWideString(param) | nil,
+		dir & Sltk.Encoding.utf8ToWideString(dir) | nil,
+		showMode | Sltk.Win32.SW_SHOWNORMAL
+	)
+}

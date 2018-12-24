@@ -1,0 +1,188 @@
+/*** gaussクラス ***/
+gauss = ${
+	process = Win32.Process(),
+	startButton = 0, // スタートボタンハンドル
+	statusWindow = 0, // ステータスウィンドウハンドル
+	jobs = ${}, // Jobリスト
+	cur = 0, // 現在実行中のJobのindex
+	complete = 0, // Job完了数
+	isRunning = false, // 実行中フラグ
+}
+
+/* Gaussian起動 */
+def gauss->execute(){
+	if !@.process->execute(config.gaussianPath) {
+		wxMessageBox("Gaussianの起動に失敗しました\n\t"..config.gaussianPath,
+			"GaussianJob ERROR", wxOK + wxICON_ERROR)
+		
+		local dlg = wxFileDialog(NULL, "GaussianのPATHを選択してください",
+			"", "", "Gaussian executable file(*.exe)|*.exe", wxFD_OPEN + wxFD_FILE_MUST_EXIST)
+		if dlg->ShowModal() == wxID_OK {
+			config.gaussianPath = dlg->GetPath()
+			config->save()
+			wxMessageBox("設定を保存しました\nプログラムを再起動してください", "GaussianJob INFO", wxOK)
+		}
+		dlg->Destroy()
+		return false
+	}
+	// Gaussianコントロールハンドル取得
+	@.startButton, @.statusWindow = 0, 0
+	Win32.enumerateChildWindows(@.process->getWindowHandle(), def(hwnd){
+		local id = Win32.getDialogControlID(hwnd)
+		if id == config.startButtonID { @.startButton = hwnd }
+		elif id == config.statusWindowID { @.statusWindow = hwnd }
+		if @.startButton != 0 & @.statusWindow != 0 { return false }
+		return true
+	})
+	if @.startButton == 0 | @.statusWindow == 0 {
+		wxMessageBox("Gaussianコントロールハンドルの取得に失敗しました\n"
+			.."File -> setting メニューからGaussianコントロールIDの設定をしてください",
+			"GaussianJob ERROR", wxOK + wxICON_ERROR)
+	}
+	return true
+}
+
+/* Jobリスト処理を実行 */
+def gauss->start(){
+	@.isRunning = true
+	widgets.buttons[5]->Disable() // クリアボタン無効化
+	widgets.buttons[6]->Disable() // 実行ボタン無効化
+	widgets.frame->SetStatusText"GaussianJob実行中"
+}
+
+/* Jobリストを1つずつ処理していく(EVT_TIMERにConnect) */
+def gauss->run(){
+	if getStatus(@.process) == Object.ENDED {
+		widgets.frame->Close() // Gaussianが終了した場合は自分も終了する
+	}
+	if !@.isRunning { return }
+	
+	if @.cur >= widgets.listCtl->GetItemCount() {
+		@->stop()
+		widgets.frame->SetStatusText"全てのJobを完了しました"
+	}else{
+		if Win32.getWindowText(@.statusWindow) == "" {
+			widgets.timer->Stop()
+			// リストにJobが残っていて、現在実行中のJobがないなら実行開始
+			local job = @.jobs[@.cur]
+			@.complete = @.complete + 1 // 実行中ジョブも完了数に含める
+			setCurrentDirectory(job.workdir) // 作業ディレクトリに移動
+			if Path.isFile(job.stem..".out") {
+				removeFile(job.stem..".out") // outputファイルを削除(Gaussianの確認ダイアログ回避)
+			}
+			// バッチファイル作成
+			saveFile(job.stem..".bcf", "!\n!User created batch file\n!start=1\n!\n"
+				..job.path.." , "..job.stem..".out")
+			System.sleep(100)
+			// Gaussianにバッチファイルを渡して実行させる
+			if !Win32.sendDropFiles(@.process->getWindowHandle(), job.workdir.."\\"..job.stem..".bcf") {
+				wxMessageBox("Gaussianが実行できませんでした\n\t'"..job.path.."'",
+					"GaussianJob ERROR", wxOK + wxICON_ERROR)
+				widgets.frame->Close()
+			}
+			System.sleep(100)
+			Win32.sendClickButton(@.startButton) // スタートボタンクリック/Gaussianスタート
+			// リストの状態・日時を変更
+			widgets.listCtl->SetItem(@.cur, 0, "実行中")
+			widgets.listCtl->SetItem(@.cur, 1, os.date"%Y/%m/%d %H:%M:%S")
+			widgets.timer->Start(100)
+		}else{
+			local status = Win32.getWindowText(@.statusWindow)
+			// Job終了のメッセージを検知する
+			for _, msg in pairs(config.completeMessages) {
+				if (msg.regex & status->match(msg.message)) | (!msg.regex & status == msg.message) {
+					Win32.setWindowText(@.statusWindow, "") // Gaussianステータス初期化
+					removeFile(@.jobs[@.cur].stem..".bcf") // 実行していたバッチファイルを削除
+					// リストの状態・日時を変更
+					widgets.listCtl->SetItem(@.cur, 0, msg.status)
+					widgets.listCtl->SetItem(@.cur, 2, os.date"%Y/%m/%d %H:%M:%S")
+					@.cur = @.cur + 1
+					// 失敗ならGaussian再起動
+					if msg.status == "失敗" {
+						widgets.timer->Stop()
+						@.process->kill()
+						System.sleep(100)
+						@->execute()
+						widgets.timer->Start(100)
+					}
+					break
+				}
+			}
+		}
+	}
+}
+
+/* Jobリスト処理を停止 */
+def gauss->stop(){
+	@.isRunning = false
+	widgets.buttons[5]->Enable(true) // クリアボタン有効化
+	widgets.buttons[6]->Enable(true) // 実行ボタン有効化
+}
+
+/* Job追加 */
+def gauss->appendJob(filename){
+	local n = widgets.listCtl->GetItemCount()
+	@.jobs[n] = ${
+		path = filename,
+		workdir = Path.getParent(filename),
+		stem = Path.getStem(filename)
+	}
+	widgets.listCtl->InsertItem(n, "")
+	widgets.listCtl->SetItem(n, 3, filename)
+	widgets.frame->SetStatusText("Jobファイル'"..filename.."'を追加しました")
+}
+
+/* Job削除 */
+def gauss->removeJob(index){ // 未処理のジョブのみ削除可能
+	if widgets.listCtl->GetItemCount() > index & index >= @.complete {
+		table.remove(@.jobs, index)
+		widgets.listCtl->DeleteItem(index)
+		widgets.frame->SetStatusText("Jobファイル '"..@.jobs[index].path.."' が削除されました")
+		return true
+	}else{
+		widgets.frame->SetStatusText"実行中/処理済みのJobファイルを削除することは出来ません"
+		return false
+	}
+}
+def gauss->removeJobs(list){
+	local diff = 0
+	table.sort(list)
+	for i = 1, #list {
+		if @->removeJob(list[i] - diff) { diff = diff + 1 }
+	}
+}
+
+/* Job全削除 */
+def gauss->clearJobs(){ // 停止中のみ実行可能
+	if !@.isRunning {
+		@.jobs = ${}
+		widgets.listCtl->DeleteAllItems()
+		@.cur, @.complete = 0, 0
+		widgets.frame->SetStatusText"全Jobファイルを削除しました"
+	}
+}
+
+
+/* 未処理のジョブを上/下に移動 */
+def gauss->moveJobToUp(index){
+	if index - 1 >= @.complete {
+		@.jobs[index-1], @.jobs[index] = @.jobs[index], @.jobs[index-1]
+		widgets.listCtl->SetItem(index-1, 3, @.jobs[index-1].path)
+		widgets.listCtl->SetItemState(index-1, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED)
+		widgets.listCtl->SetItem(index, 3, @.jobs[index].path)
+		widgets.listCtl->SetItemState(index, 0, wxLIST_STATE_SELECTED)
+	}elif index > 0 {
+		widgets.frame->SetStatusText"実行中/処理済みのジョブの上に移動することは出来ません"
+	}
+}
+def gauss->moveJobToDown(index){
+	if @.complete > index {
+		widgets.frame->SetStatusText"実行中/処理済みのジョブを移動することは出来ません"
+	}elif index + 1 < widgets.listCtl->GetItemCount() {
+		@.jobs[index+1], @.jobs[index] = @.jobs[index], @.jobs[index+1]
+		widgets.listCtl->SetItem(index+1, 3, @.jobs[index+1].path)
+		widgets.listCtl->SetItemState(index+1, wxLIST_STATE_SELECTED, wxLIST_STATE_SELECTED)
+		widgets.listCtl->SetItem(index, 3, @.jobs[index].path)
+		widgets.listCtl->SetItemState(index, 0, wxLIST_STATE_SELECTED)
+	}
+}

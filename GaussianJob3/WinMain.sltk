@@ -1,0 +1,7 @@
+require "Widgets"
+
+if gauss->execute() {
+	widgets->createMainFrame()
+	widgets.frame->Show(true)
+	wxGetApp()->MainLoop()
+}

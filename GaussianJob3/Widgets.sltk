@@ -1,0 +1,133 @@
+require "wx"
+using(wx)
+
+require "Win32"
+require "Config"
+require "SettingDialog"
+require "Gaussian"
+
+/* Widgetsクラス */
+widgets = ${}
+
+widgets.frame = wxFrame(NULL, wxID_ANY, "GaussianJob ver. 3.0.0", wxDefaultPosition, wxSize(640, 480), wxDEFAULT_FRAME_STYLE)
+widgets.timer = wxTimer(widgets.frame)
+widgets.buttonsPanel = wxPanel(widgets.frame, wxID_ANY)
+widgets.buttons = ${
+	wxButton(widgets.buttonsPanel, wxID_ANY, "ジョブ追加", wxDefaultPosition, wxSize(100,30)),
+	wxButton(widgets.buttonsPanel, wxID_ANY, "ジョブ削除", wxDefaultPosition, wxSize(100,30)),
+	wxButton(widgets.buttonsPanel, wxID_ANY, "↑", wxDefaultPosition, wxSize(30,30)),
+	wxButton(widgets.buttonsPanel, wxID_ANY, "↓", wxDefaultPosition, wxSize(30,30)),
+	wxButton(widgets.buttonsPanel, wxID_ANY, "クリア", wxDefaultPosition, wxSize(60,30)),
+	wxButton(widgets.buttonsPanel, wxID_ANY, "実行", wxDefaultPosition, wxSize(50,30))
+}
+widgets.listBox = wxStaticBox(widgets.frame, wxID_ANY, "Gaussianジョブリスト")
+widgets.listCtl = wxListCtrl(widgets.frame, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT)
+
+/* メインフレーム作成 */
+def widgets->createMainFrame(){
+	local layout = wxBoxSizer(wxVERTICAL)
+	local buttonsLayout = wxBoxSizer(wxHORIZONTAL)
+	local listLayout = wxStaticBoxSizer(widgets.listBox, wxVERTICAL)
+	
+	local fileMenu = wxMenu()
+	local menuBar = wxMenuBar()
+	
+	/*** 各種メニュー作成 ***/
+	fileMenu->Append(100, "&Setting", "GaussianコントローラーのIDを設定します")
+	fileMenu->Append(wxID_EXIT, "E&xit", "プログラムを終了します")
+	menuBar->Append(fileMenu, "&File")
+	@.frame->SetMenuBar(menuBar)
+	
+	@.frame->Connect(wxID_EXIT, wxEVT_COMMAND_MENU_SELECTED, def(){
+		widgets.frame->Close(true)
+	})
+	@.frame->Connect(100, wxEVT_COMMAND_MENU_SELECTED, def(){
+		if gauss.isRunning {
+			@.frame->SetStatusText"Job実行中は設定できません"
+		}else{
+			local dlg = config->createDialog()
+			dlg->ShowModal()
+		}
+	})
+	
+	@.frame->CreateStatusBar()
+	@.frame->SetStatusText"Welcome to GaussianJob!"
+	
+	/*** ボタン類作成 ***/
+	@.buttonsPanel->SetBackgroundColour(wxColour"#AFAFAF")
+	@.buttons[1]->SetToolTip(wxToolTip("リストにGaussianジョブ(.gjf)を追加します"))
+	@.buttons[1]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		local dlg = wxFileDialog(widgets.frame, "ジョブファイルを選択してください",
+			"", "", "Gaussian input file (*.gjf)|*.gjf", wxFD_OPEN+wxFD_FILE_MUST_EXIST+wxFD_MULTIPLE)
+		if dlg->ShowModal() == wxID_OK {
+			for _, path in pairs(dlg->GetPaths()) { gauss->appendJob(path) }
+		}
+		dlg->Destroy()
+	})
+	
+	@.buttons[2]->SetToolTip(wxToolTip("選択された未処理のGaussianジョブを削除します"))
+	@.buttons[2]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		local selections, select = ${}, -1
+		for i = 1, widgets.listCtl->GetSelectedItemCount() {
+			select = widgets.listCtl->GetNextItem(select, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)
+			table.insert(selections, select)
+		}
+		gauss->removeJobs(selections)
+	})
+	
+	@.buttons[3]->SetToolTip(wxToolTip("選択された未処理のGaussianジョブを上に移動します"))
+	@.buttons[3]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		gauss->moveJobToUp(widgets.listCtl->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED))
+	})
+	
+	@.buttons[4]->SetToolTip(wxToolTip("選択された未処理のGaussianジョブを下に移動します"))
+	@.buttons[4]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		gauss->moveJobToDown(widgets.listCtl->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED))
+	})
+	
+	@.buttons[5]->SetToolTip(wxToolTip("Gaussianジョブを全て削除します"))
+	@.buttons[5]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		gauss->clearJobs()
+	})
+	
+	@.buttons[6]->SetToolTip(wxToolTip("Gaussianジョブの処理を開始します"))
+	@.buttons[6]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		gauss->start()
+	})
+	
+	for _, btn in pairs(@.buttons){
+		buttonsLayout->Add(btn, 0, wxALL, 5)
+	}
+	@.buttonsPanel->SetSizer(buttonsLayout)
+	layout->Add(@.buttonsPanel)
+	
+	/*** ジョブリスト作成 ***/
+	@.listCtl->InsertColumn(0, "状態", wxLIST_FORMAT_LEFT, 60)
+	@.listCtl->InsertColumn(1, "開始日時", wxLIST_FORMAT_LEFT, 100)
+	@.listCtl->InsertColumn(2, "完了日時", wxLIST_FORMAT_LEFT, 100)
+	@.listCtl->InsertColumn(3, "ファイルパス", wxLIST_FORMAT_LEFT, 360)
+	
+	listLayout->Add(@.listCtl, 1, wxEXPAND+wxALL, 5)
+	layout->Add(listLayout, 1, wxEXPAND+wxALL, 5)
+	@.frame->SetSizer(layout)
+	
+	/*** D&D対応 ***/
+	@.frame->DragAcceptFiles(true)
+	@.frame->Connect(wxEVT_DROP_FILES, def(evt){
+		local files = evt->GetFiles()
+		for _, file in pairs(files){
+			if Path.getExtension(file)->same".gjf" { gauss->appendJob(file) }
+		}
+	})
+	
+	@.frame->SetIcon(wxIcon(System.getArgument(0), wxBITMAP_TYPE_ICO))
+	@.frame->Connect(wxID_ANY, wxEVT_CLOSE_WINDOW, def(){
+		gauss.process->kill()
+		@.frame->Destroy()
+	})
+	
+	@.frame->Connect(wxEVT_TIMER, def(){
+		gauss->run()
+	})
+	@.timer->Start(100)
+}

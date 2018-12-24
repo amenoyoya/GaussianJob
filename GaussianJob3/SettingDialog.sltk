@@ -1,0 +1,88 @@
+/*** 設定ダイアログ作成 ***/
+def config->createDialog(){
+	local frame = wxDialog(widgets.frame, wxID_ANY, "GaussianコントロールID設定ダイアログ", wxDefaultPosition, wxSize(560, 480))
+	local layout, buttons_layout = wxBoxSizer(wxVERTICAL), wxBoxSizer(wxHORIZONTAL)
+	local buttons_panel = wxPanel(frame, wxID_ANY)
+	local buttons = ${
+		wxButton(buttons_panel, wxID_ANY, "Set ▶", wxDefaultPosition, wxSize(80,30)),
+		wxButton(buttons_panel, wxID_ANY, "Set □", wxDefaultPosition, wxSize(80,30)),
+		wxButton(buttons_panel, wxID_ANY, "保存", wxDefaultPosition, wxSize(80,30))
+	}
+	buttons[1]->SetToolTip(wxToolTip("選択中のコントロールをスタートボタンにセットします"))
+	buttons[2]->SetToolTip(wxToolTip("選択中のコントロールをステータスウィンドウにセットします"))
+	buttons[3]->SetToolTip(wxToolTip("設定を保存して終了します"))
+
+	for _, btn in pairs(buttons){
+		buttons_layout->Add(btn, 0, wxALL, 5)
+	}
+	buttons_panel->SetSizer(buttons_layout)
+	layout->Add(buttons_panel)
+
+	local list = wxListCtrl(frame, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxLC_REPORT+wxLC_SINGLE_SEL)
+	list->InsertColumn(0, "設定", wxLIST_FORMAT_LEFT, 60)
+	list->InsertColumn(1, "ID", wxLIST_FORMAT_LEFT, 60)
+	list->InsertColumn(2, "X位置", wxLIST_FORMAT_LEFT, 60)
+	list->InsertColumn(3, "Y位置", wxLIST_FORMAT_LEFT, 60)
+	list->InsertColumn(4, "タイトル", wxLIST_FORMAT_LEFT, 200)
+	list->InsertColumn(5, "クラス名", wxLIST_FORMAT_LEFT, 100)
+	
+	layout->Add(list, 1, wxEXPAND+wxALL, 5)
+	frame->SetSizer(layout)
+	
+	local listHWND, listID = ${}, ${}
+	
+	buttons[1]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		local select = list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)
+		for i = 0, list->GetItemCount()-1 {
+			if i == select {
+				list->SetItem(i, 0, "▶")
+				config.startButton = listHWND[i]
+				config.startButtonID = listID[i]
+			}elif list->GetItemText(i, 0) == "▶" {
+				list->SetItem(i, 0, "")
+			}
+		}
+	})
+	
+	buttons[2]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		local select = list->GetNextItem(-1, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)
+		for i = 0, list->GetItemCount()-1 {
+			if i == select {
+				list->SetItem(i, 0, "□")
+				config.statusWindow = listHWND[i]
+				config.statusWindowID = listID[i]
+			}elif list->GetItemText(i, 0) == "□" {
+				list->SetItem(i, 0, "")
+			}
+		}
+	})
+	
+	buttons[3]->Connect(wxID_ANY, wxEVT_COMMAND_BUTTON_CLICKED, def(){
+		@->save()
+		frame->Destroy()
+	})
+	
+	local _, x, y = Win32.getWindowPosition(gauss.process->getWindowHandle())
+	local n = 0
+	Win32.enumerateChildWindows(gauss.process->getWindowHandle(), def(hwnd){
+		local _, left, top = Win32.getWindowPosition(hwnd)
+		
+		listHWND[n] = hwnd
+		listID[n] = Win32.getDialogControlID(hwnd)
+		if config.startButtonID == listID[n] {
+			list->InsertItem(n, "▶")
+		}elif config.statusWindowID == listID[n] {
+			list->InsertItem(n, "□")
+		}else{
+			list->InsertItem(n, "")
+		}
+		list->SetItem(n, 1, tostring(listID[n]))
+		list->SetItem(n, 2, tostring(left - x))
+		list->SetItem(n, 3, tostring(top - y))
+		list->SetItem(n, 4, Win32.getWindowText(hwnd))
+		list->SetItem(n, 5, Win32.getWindowName(hwnd))
+		n = n + 1
+		return true
+	})
+	return frame
+}

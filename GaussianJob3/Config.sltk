@@ -1,0 +1,54 @@
+/* GaussianJob設定 */
+config = ${
+	gaussianPath = [[C:\App\G09W\g09w.exe]],
+	startButtonID = 18000,
+	statusWindowID = 10025,
+	completeMessages = ${
+		${regex = false, message = "Processing Complete.", status = "完了"},
+		${regex = false, message = "Link died!", status = "失敗"},
+	}
+}
+
+/* 設定読み込み */
+def config->load(){
+	local f = File(Path.getParent(System.getArgument(0)).."\\.config.txt")
+	if getStatus(f) != Object.ACTIVE { return false }
+	
+	local path, start, status = f->readLine(), tonumber(f->readLine()), tonumber(f->readLine())
+	if path != "" { @.gaussianPath = path }
+	if start { @.startButtonID = start }
+	if status { @.statusWindowID = status }
+	// Job終了メッセージ設定を読み込む
+	while getStatus(f) != Object.ENDED {
+		local l = f->readLine()
+		if l != "" {
+			local r, m, s = l->match"([^\t]+)\t([^\t]+)\t([^\t]+)"
+			if r & m & s {
+				table.insert(@.completeMessages, ${
+					regex = (r == "regex"), message = m, status = s
+				})
+			}
+		}
+	}
+	return true
+}
+
+/* 設定書き込み */
+def config->save(){
+	local f = File(Path.getParent(System.getArgument(0)).."\\.config.txt", "w")
+	if getStatus(f) != Object.ACTIVE { return false }
+	
+	f->write(@.gaussianPath.."\n"..@.startButtonID.."\n"..@.statusWindowID.."\n")
+	for i = 3, #@.completeMessages {
+		f->write((@.compleMessages[i].regex & "regex" | "plain").."\t"
+			..@.compleMessages[i].message.."\t"..@.compleMessages[i].status.."\n")
+	}
+}
+
+
+/* startup時に設定読み込み */
+config->load()
+
+/* startup時に環境変数設定 */
+setenv("GAUSS_EXEDIR", Path.getParent(config.gaussianPath))
+setenv("PATH", getenv"GAUSS_EXEDIR"..";"..getenv"PATH")
